@@ -114,7 +114,7 @@ function loadGif(file) {
 // done() fires when the GIF ends (+ endWait) and it has faded out (0.07s). The sound keeps playing until it finishes.
 // hold    = seconds to sit on frame 1 before the GIF starts animating.
 // endWait = seconds to sit on the last frame after the GIF ends, before fading out.
-const FADE = 0.07;
+const FADE = 0.5;
 function scare(gifFile, snd, done, hold, endWait) {
   const urls = [];
   const wait = ms => new Promise(r => setTimeout(r, ms));
