@@ -22,8 +22,8 @@ const CFG = {
   RUN_TIME: 0.4,             // seconds the run sprite shows after moving
   PLAYER_H: 36,              // sprite is scaled to this height only if the PNG is huge (>64px tall)
   MAX_HEARTS: 3,
-  CATCH: 1000,
-  PENALTY: 2000,
+  CATCH: 100,
+  PENALTY: 200,
   EARLY_ROUNDS: 3,           // rounds that use the short egg count
   EARLY_EGGS: [5, 10],
   LATE_EGGS: [15, 30],
