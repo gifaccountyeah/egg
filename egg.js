@@ -15,9 +15,9 @@ const CFG = {
   HUD_H: 12,                 // top bar height
   GROUND: 128,               // y of the floor (player's feet)
   EGG: 4,                    // egg is 4x4
-  TICK: 0.07,                 // seconds between egg "steps" (round 1)
-  STEP: 10,                   // pixels an egg drops per step (was 4, +2 for speed). Raise for faster eggs.
-  MIN_TICK: 0.12,            // fastest the steps ever get
+  TICK: 0.07,                // seconds between egg "steps" (round 1)
+  STEP: 8,                   // pixels an egg drops per step
+  MIN_TICK: 0.04,            // fastest the steps ever get (must be below TICK or rounds would slow down!)
   SPEEDUP: 0.92,             // each round multiplies the tick time by this
   RUN_TIME: 0.4,             // seconds the run sprite shows after moving
   PLAYER_H: 36,              // sprite is scaled to this height only if the PNG is huge (>64px tall)
@@ -122,27 +122,58 @@ function showFull(src, fit) {
   return im;
 }
 
-// GIF fills the screen and a sound plays at the same time; done() fires once BOTH are over
-function scare(gifFile, snd, done) {
-  let gifDone = false, audDone = false, finished = false, img = null, url = null;
-  const check = () => {
-    if (finished || !(gifDone && audDone)) return;
-    finished = true;
-    if (img) img.remove();
-    if (url) URL.revokeObjectURL(url);
+// GIF shows 1:1 (native size, centred, smooth) on a black backdrop while a sound plays.
+// done() fires when the GIF ends and it has faded out (0.07s). The sound keeps playing until it finishes.
+// hold = seconds to sit on frame 1 before the GIF starts animating.
+const FADE = 0.07;
+function scare(gifFile, snd, done, hold) {
+  const urls = [];
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  loadGif(gifFile).then(async g => {
+    const mkUrl = () => {
+      if (!g.buf) return g.src;
+      const u = URL.createObjectURL(new Blob([g.buf], { type: "image/gif" })); // fresh = starts at frame 1
+      urls.push(u);
+      return u;
+    };
+    const fit = el => Object.assign(el.style, { maxWidth: "100%", maxHeight: "100%", display: "block", imageRendering: "auto" });
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+      position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh", background: "#000",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: "10", opacity: "1"
+    });
+    document.body.appendChild(overlay);
+
+    if (hold > 0) {
+      // frame 1 only: snapshot it on a canvas, sound starts now, GIF starts after the hold
+      const im0 = new Image();
+      im0.src = mkUrl();
+      try { await im0.decode(); } catch (e) {}
+      const c = document.createElement("canvas");
+      c.width = im0.naturalWidth || 1; c.height = im0.naturalHeight || 1;
+      c.getContext("2d").drawImage(im0, 0, 0);
+      fit(c);
+      overlay.appendChild(c);
+      playAudio(snd).catch(() => {});
+      await wait(hold * 1000);
+    }
+
+    const im = new Image();
+    im.src = mkUrl();
+    fit(im);
+    try { await im.decode(); } catch (e) {}
+    overlay.replaceChildren(im);
+    if (!(hold > 0)) playAudio(snd).catch(() => {});
+
+    await wait(g.dur > 0 ? g.dur * 1000 : 500);
+
+    overlay.style.transition = "opacity " + FADE + "s linear";
+    overlay.style.opacity = "0";
+    await wait(FADE * 1000);
+    overlay.remove();
+    urls.forEach(u => URL.revokeObjectURL(u));
     done();
-  };
-  const endAud = () => { audDone = true; check(); };
-  loadGif(gifFile).then(g => {
-    // fresh blob URL each time so the GIF always starts from frame 1
-    if (g.buf) url = URL.createObjectURL(new Blob([g.buf], { type: "image/gif" }));
-    img = showFull(url || g.src, "cover");
-    snd.onended = endAud;
-    snd.onerror = endAud;
-    playAudio(snd).catch(endAud);
-    if (g.dur > 0) setTimeout(() => { gifDone = true; check(); }, g.dur * 1000);
-    else { gifDone = true; check(); }
-  });
+  }).catch(() => done());
 }
 
 // EGG_CHEATER.png on its own for 20 seconds, no timer, nothing else
@@ -199,6 +230,8 @@ let eggs = [], fx = [];
 let score = 0, hearts = CFG.MAX_HEARTS, round = 0;
 let heartsMax = CFG.MAX_HEARTS; // drops by 1 after every jumpscare, until reload
 let lossCount = 0;
+let scareCount = 0;           // 1st and 2nd are 'hurt'; the 3rd is the kill
+let scareBg = "black";        // what's under the scare overlay
 let target = 0, spawned = 0, spawnGap = 5, sinceSpawn = 0;
 let tickTime = CFG.TICK, tickAcc = 0;
 let banner = 0, bannerText = "", bannerSub = "";
@@ -217,9 +250,7 @@ function toMenu() {
 function startGame() {
   stopAll();
   if (heartsMax <= 0) { // no hearts to start with...
-    state = "scare";
-    flagCheater();
-    scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; });
+    killScare();
     return;
   }
   playAudio(audio.play).catch(() => {});
@@ -254,15 +285,22 @@ function lose() {
   playAudio(audio.lose).catch(after);
 }
 
+function killScare() {
+  state = "scare";
+  scareBg = "black";
+  flagCheater();
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5);
+}
+
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
 function afterScrambled() {
-  if (lossCount >= 2) {
-    heartsMax = Math.max(0, heartsMax - 1);
-    state = "scare";
-    scare("Charles_jumoscare1.gif", sfx.hurt, () => { state = "over"; });
-  } else {
-    state = "over";
-  }
+  if (lossCount < 2) { state = "over"; return; }
+  scareCount++;
+  if (scareCount >= 3) { killScare(); return; } // third jumpscare = the kill one
+  heartsMax = Math.max(0, heartsMax - 1);
+  state = "scare";
+  scareBg = "over";
+  scare("Charles_jumoscare1.gif", sfx.hurt, () => { state = "over"; });
 }
 
 function cheatGlitch() {
@@ -460,7 +498,8 @@ function draw() {
     case "menu": drawMenu(); break;
     case "play": case "dying": case "glitch": drawField(); break;
     case "over": drawOver(); break;
-    case "scare": case "black": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
+    case "scare": if (scareBg === "over") { drawOver(); break; } // fall through to black
+    case "black": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
   }
 }
 
