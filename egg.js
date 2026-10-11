@@ -370,7 +370,7 @@ function killScare() {
   state = "scare";
   scareBg = "black";
   flagCheater();
-  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 1); // hold 0.5s on frame 1
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.8); // hold 0.5s on frame 1
 }
 
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
