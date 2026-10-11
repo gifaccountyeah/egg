@@ -99,13 +99,56 @@ function gifDuration(b) {
   return cs / 100;
 }
 
+// Real format by looking at the bytes (the file extension can lie, e.g. a .gif that is really WebP)
+function sniffType(b) {
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return "image/gif";
+  if (b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+  return "image/gif";
+}
+
+// Total length (seconds) of one loop of an animated WebP
+function webpDuration(b) {
+  let i = 12, ms = 0;
+  while (i < b.length - 8) {
+    const tag = String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
+    const sz = (b[i + 4] | (b[i + 5] << 8) | (b[i + 6] << 16) | (b[i + 7] << 24)) >>> 0;
+    if (tag === "ANMF") ms += b[i + 20] | (b[i + 21] << 8) | (b[i + 22] << 16);
+    i += 8 + sz + (sz & 1);
+  }
+  return ms / 1000;
+}
+
+// Makes an animation play only once (so the last frame stays put instead of looping)
+function playOnce(buf, type) {
+  const b = new Uint8Array(buf.slice(0));
+  if (type === "image/webp") {
+    for (let i = 12; i < b.length - 14; i++) {
+      if (b[i] === 0x41 && b[i + 1] === 0x4E && b[i + 2] === 0x49 && b[i + 3] === 0x4D && b[i + 4] === 6) { // "ANIM"
+        b[i + 12] = 1; b[i + 13] = 0; // loop count = 1
+        break;
+      }
+    }
+  } else {
+    const tag = "NETSCAPE2.0";
+    for (let i = 0; i < b.length - 11; i++) {
+      let m = true;
+      for (let k = 0; k < 11; k++) if (b[i + k] !== tag.charCodeAt(k)) { m = false; break; }
+      if (m) { b[i] = 0x58; break; }
+    }
+  }
+  return b;
+}
+
 const gifCache = {};
 function loadGif(file) {
   if (!gifCache[file]) {
     gifCache[file] = fetch(BASE + file)
       .then(r => r.arrayBuffer())
-      .then(buf => ({ buf, dur: gifDuration(new Uint8Array(buf)), src: BASE + file }))
-      .catch(() => ({ buf: null, dur: 0, src: BASE + file }));
+      .then(buf => {
+        const b = new Uint8Array(buf), type = sniffType(b);
+        return { buf, type, dur: type === "image/webp" ? webpDuration(b) : gifDuration(b), src: BASE + file };
+      })
+      .catch(() => ({ buf: null, type: "image/gif", dur: 0, src: BASE + file }));
   }
   return gifCache[file];
 }
@@ -137,7 +180,7 @@ function scare(gifFile, snd, done, hold) {
     let dec = null, frames = 0;
     if (g.buf && typeof ImageDecoder !== "undefined") {
       try {
-        dec = new ImageDecoder({ data: g.buf.slice(0), type: "image/gif" });
+        dec = new ImageDecoder({ data: g.buf.slice(0), type: g.type });
         await dec.tracks.ready;
         frames = dec.tracks.selectedTrack.frameCount;
         if (!(frames > 0)) dec = null;
@@ -169,14 +212,7 @@ function scare(gifFile, snd, done, hold) {
       // fallback: plain <img>, played once, timer with slack
       const mkUrl = () => {
         if (!g.buf) return g.src;
-        const b = new Uint8Array(g.buf.slice(0));
-        const tag = "NETSCAPE2.0"; // rename the loop block so it plays once and holds the last frame
-        for (let i = 0; i < b.length - 11; i++) {
-          let m = true;
-          for (let k = 0; k < 11; k++) if (b[i + k] !== tag.charCodeAt(k)) { m = false; break; }
-          if (m) { b[i] = 0x58; break; }
-        }
-        const u = URL.createObjectURL(new Blob([b], { type: "image/gif" }));
+        const u = URL.createObjectURL(new Blob([playOnce(g.buf, g.type)], { type: g.type }));
         urls.push(u);
         return u;
       };
