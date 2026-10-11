@@ -15,15 +15,15 @@ const CFG = {
   HUD_H: 12,                 // top bar height
   GROUND: 128,               // y of the floor (player's feet)
   EGG: 4,                    // egg is 4x4
-  TICK: 0.07,                 // seconds between egg "steps" (round 1)
+  TICK: 0.5,                 // seconds between egg "steps" (round 1)
   STEP: 6,                   // pixels an egg drops per step (was 4, +2 for speed). Raise for faster eggs.
   MIN_TICK: 0.12,            // fastest the steps ever get
   SPEEDUP: 0.92,             // each round multiplies the tick time by this
   RUN_TIME: 0.4,             // seconds the run sprite shows after moving
   PLAYER_H: 36,              // sprite is scaled to this height only if the PNG is huge (>64px tall)
   MAX_HEARTS: 3,
-  CATCH: 100,
-  PENALTY: 200,
+  CATCH: 1000,
+  PENALTY: 2000,
   EARLY_ROUNDS: 3,           // rounds that use the short egg count
   EARLY_EGGS: [5, 10],
   LATE_EGGS: [15, 30],
@@ -75,6 +75,84 @@ function playAudio(a) {
   return p && p.then ? p : Promise.resolve();
 }
 
+// ---------- jumpscares / punishment ----------
+const sfx = {
+  hurt: mkAudio("Charles_hurt.mp3", false),
+  kill: mkAudio("Charles_kill.mp3", false)
+};
+
+// remembers (across reloads) that the player must sit in the corner
+const CHEATER_KEY = "egg_cheater";
+function flagCheater() { try { localStorage.setItem(CHEATER_KEY, "1"); } catch (e) {} }
+function hasFlag() { try { return localStorage.getItem(CHEATER_KEY) === "1"; } catch (e) { return false; } }
+function clearFlag() { try { localStorage.removeItem(CHEATER_KEY); } catch (e) {} }
+
+// Reads how long one loop of a GIF lasts by summing its frame delays
+function gifDuration(b) {
+  let cs = 0;
+  for (let i = 0; i < b.length - 8; i++) {
+    if (b[i] === 0x21 && b[i + 1] === 0xF9 && b[i + 2] === 4 && b[i + 7] === 0) {
+      const d = b[i + 4] | (b[i + 5] << 8);
+      cs += d <= 1 ? 10 : d;
+    }
+  }
+  return cs / 100;
+}
+
+const gifCache = {};
+function loadGif(file) {
+  if (!gifCache[file]) {
+    gifCache[file] = fetch(BASE + file)
+      .then(r => r.arrayBuffer())
+      .then(buf => ({ buf, dur: gifDuration(new Uint8Array(buf)), src: BASE + file }))
+      .catch(() => ({ buf: null, dur: 0, src: BASE + file }));
+  }
+  return gifCache[file];
+}
+
+// Full-window image. NOT pixelated (the only smooth thing in the game).
+function showFull(src, fit) {
+  const im = document.createElement("img");
+  im.src = src;
+  Object.assign(im.style, {
+    position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh",
+    objectFit: fit, background: "#000", imageRendering: "auto", zIndex: "10"
+  });
+  document.body.appendChild(im);
+  return im;
+}
+
+// GIF fills the screen and a sound plays at the same time; done() fires once BOTH are over
+function scare(gifFile, snd, done) {
+  let gifDone = false, audDone = false, finished = false, img = null, url = null;
+  const check = () => {
+    if (finished || !(gifDone && audDone)) return;
+    finished = true;
+    if (img) img.remove();
+    if (url) URL.revokeObjectURL(url);
+    done();
+  };
+  const endAud = () => { audDone = true; check(); };
+  loadGif(gifFile).then(g => {
+    // fresh blob URL each time so the GIF always starts from frame 1
+    if (g.buf) url = URL.createObjectURL(new Blob([g.buf], { type: "image/gif" }));
+    img = showFull(url || g.src, "cover");
+    snd.onended = endAud;
+    snd.onerror = endAud;
+    playAudio(snd).catch(endAud);
+    if (g.dur > 0) setTimeout(() => { gifDone = true; check(); }, g.dur * 1000);
+    else { gifDone = true; check(); }
+  });
+}
+
+// EGG_CHEATER.png on its own for 20 seconds, no timer, nothing else
+function cheaterWait() {
+  return new Promise(res => {
+    const im = showFull(BASE + "EGG_CHEATER.png", "contain");
+    setTimeout(() => { im.remove(); clearFlag(); res(); }, 20000);
+  });
+}
+
 // ---------- sprites ----------
 function loadImg(file) {
   return new Promise((res, rej) => {
@@ -119,6 +197,8 @@ let menuReady = false; // has menu music started (browsers need a click first)
 let lane = 1, runTimer = 0;
 let eggs = [], fx = [];
 let score = 0, hearts = CFG.MAX_HEARTS, round = 0;
+let heartsMax = CFG.MAX_HEARTS; // drops by 1 after every jumpscare, until reload
+let lossCount = 0;
 let target = 0, spawned = 0, spawnGap = 5, sinceSpawn = 0;
 let tickTime = CFG.TICK, tickAcc = 0;
 let banner = 0, bannerText = "", bannerSub = "";
@@ -136,8 +216,14 @@ function toMenu() {
 
 function startGame() {
   stopAll();
+  if (heartsMax <= 0) { // no hearts to start with...
+    state = "scare";
+    flagCheater();
+    scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; });
+    return;
+  }
   playAudio(audio.play).catch(() => {});
-  score = 0; hearts = CFG.MAX_HEARTS; round = 0;
+  score = 0; hearts = heartsMax; round = 0;
   lane = 1; runTimer = 0; eggs = []; fx = [];
   nextRound();
   state = "play";
@@ -145,7 +231,7 @@ function startGame() {
 
 function nextRound() {
   round++;
-  if (round > 1 && hearts < CFG.MAX_HEARTS) hearts++;
+  if (round > 1 && hearts < heartsMax) hearts++;
   const r = round <= CFG.EARLY_ROUNDS ? CFG.EARLY_EGGS : CFG.LATE_EGGS;
   target = rand(r[0], r[1]);
   spawned = 0;
@@ -161,12 +247,27 @@ function nextRound() {
 function lose() {
   state = "dying";
   stopAll();
-  audio.lose.onended = () => { state = "over"; };
-  playAudio(audio.lose).catch(() => { state = "over"; });
+  lossCount++;
+  let fired = false;
+  const after = () => { if (!fired) { fired = true; afterScrambled(); } };
+  audio.lose.onended = after;
+  playAudio(audio.lose).catch(after);
+}
+
+// Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
+function afterScrambled() {
+  if (lossCount >= 2) {
+    heartsMax = Math.max(0, heartsMax - 1);
+    state = "scare";
+    scare("Charles_jumoscare1.gif", sfx.hurt, () => { state = "over"; });
+  } else {
+    state = "over";
+  }
 }
 
 function cheatGlitch() {
   state = "glitch";
+  flagCheater();
   score = CFG.MAX_SCORE;
   stopAll();
   setTimeout(() => {
@@ -324,7 +425,7 @@ function drawField() {
   // HUD
   ctx.fillStyle = "#1c261c"; ctx.fillRect(0, 0, W, CFG.HUD_H);
   text(pad9(score), 3, 2, 8, "#fff");
-  for (let i = 0; i < CFG.MAX_HEARTS; i++) drawHeart(W - 3 - (CFG.MAX_HEARTS - i) * 7, 3, i < hearts);
+  for (let i = 0; i < heartsMax; i++) drawHeart(W - 3 - (heartsMax - i) * 7, 3, i < hearts);
   text("R" + round, W / 2 + 10, 2, 8, "#9fc79f", "center");
 
   if (state === "play" && banner > 0) {
@@ -359,7 +460,7 @@ function draw() {
     case "menu": drawMenu(); break;
     case "play": case "dying": case "glitch": drawField(); break;
     case "over": drawOver(); break;
-    case "black": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
+    case "scare": case "black": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
   }
 }
 
@@ -411,6 +512,8 @@ cv.addEventListener("pointerdown", e => {
 // ---------- boot ----------
 (async () => {
   requestAnimationFrame(frame);
+  loadGif("Charles_jumoscare1.gif"); loadGif("Charles_jumoscare2.gif"); // preload
+  if (hasFlag()) await cheaterWait();
   const [idle, run] = await Promise.allSettled([loadImg("EGG_CharlesIdle.png"), loadImg("EGG_CharlesRun.png")]);
   if (idle.status === "fulfilled") spriteIdle = buildSprite(idle.value);
   if (run.status === "fulfilled") spriteRun = buildSprite(run.value);
