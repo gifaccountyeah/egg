@@ -111,28 +111,20 @@ function loadGif(file) {
 }
 
 // GIF fills exactly the game screen (same box as the canvas), smooth, with a sound playing.
-// done() fires when the GIF ends (+ endWait) and it has faded out (0.07s). The sound keeps playing until it finishes.
+// done() fires when the GIF ends and it has faded out (0.07s). The sound keeps playing until it finishes.
 // hold    = seconds to sit on frame 1 before the GIF starts animating.
-// endWait = seconds to sit on the last frame after the GIF ends, before fading out.
-const FADE = 0.5;
-function scare(gifFile, snd, done, hold, endWait) {
+// fadeLead = if set, the fade starts this many seconds BEFORE the GIF ends and lasts until it ends.
+//            (otherwise it's a quick 0.07s fade right when the GIF ends)
+// With hold set, the sound starts the instant the scare starts (on frame 1), not when the GIF starts moving.
+const FADE = 0.07;
+function scare(gifFile, snd, done, hold, fadeLead) {
   const urls = [];
+  if (hold > 0) playAudio(snd).catch(() => {});
   const wait = ms => new Promise(r => setTimeout(r, ms));
   loadGif(gifFile).then(async g => {
     const mkUrl = () => {
       if (!g.buf) return g.src;
-      let buf = g.buf;
-      if (endWait > 0) {
-        // make the GIF play once (rename its loop block) so the last frame stays put during the wait
-        const b = new Uint8Array(g.buf.slice(0));
-        const tag = "NETSCAPE2.0";
-        for (let i = 0; i < b.length - 11; i++) {
-          let m = true;
-          for (let k = 0; k < 11; k++) if (b[i + k] !== tag.charCodeAt(k)) { m = false; break; }
-          if (m) { b[i] = 0x58; break; }
-        }
-        buf = b;
-      }
+      const buf = g.buf;
       const u = URL.createObjectURL(new Blob([buf], { type: "image/gif" })); // fresh = starts at frame 1
       urls.push(u);
       return u;
@@ -158,7 +150,6 @@ function scare(gifFile, snd, done, hold, endWait) {
       c.getContext("2d").drawImage(im0, 0, 0);
       fit(c);
       overlay.appendChild(c);
-      playAudio(snd).catch(() => {});
       await wait(hold * 1000);
     }
 
@@ -169,12 +160,14 @@ function scare(gifFile, snd, done, hold, endWait) {
     overlay.replaceChildren(im);
     if (!(hold > 0)) playAudio(snd).catch(() => {});
 
-    await wait(g.dur > 0 ? g.dur * 1000 : 500);
-    if (endWait > 0) await wait(endWait * 1000);
+    const total = g.dur > 0 ? g.dur : 0.5;
+    const lead = fadeLead > 0 ? Math.min(fadeLead, total) : 0;
+    await wait((total - lead) * 1000);
 
-    overlay.style.transition = "opacity " + FADE + "s linear";
+    const fade = lead > 0 ? lead : FADE;
+    overlay.style.transition = "opacity " + fade + "s linear";
     overlay.style.opacity = "0";
-    await wait(FADE * 1000);
+    await wait(fade * 1000);
     overlay.remove();
     urls.forEach(u => URL.revokeObjectURL(u));
     done();
@@ -309,7 +302,7 @@ function killScare() {
   state = "scare";
   scareBg = "black";
   flagCheater();
-  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5, 0.5);
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5, 0.5); // hold 0.5s on frame 1, fade over the last 0.5s
 }
 
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
