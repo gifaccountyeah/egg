@@ -15,7 +15,7 @@ const CFG = {
   HUD_H: 12,                 // top bar height
   GROUND: 128,               // y of the floor (player's feet)
   EGG: 4,                    // egg is 4x4
-  TICK: 0.5,                 // seconds between egg "steps" (round 1)
+  TICK: 0.07,                 // seconds between egg "steps" (round 1)
   STEP: 6,                   // pixels an egg drops per step (was 4, +2 for speed). Raise for faster eggs.
   MIN_TICK: 0.12,            // fastest the steps ever get
   SPEEDUP: 0.92,             // each round multiplies the tick time by this
