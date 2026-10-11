@@ -111,13 +111,10 @@ function loadGif(file) {
 }
 
 // GIF fills exactly the game screen (same box as the canvas), smooth, with a sound playing.
-// done() fires when the GIF ends and it has faded out (0.07s). The sound keeps playing until it finishes.
+// done() fires when the GIF ends and it has been cut away instantly (no fade). The sound keeps playing until it finishes.
 // hold    = seconds to sit on frame 1 before the GIF starts animating.
-// fadeLead = if set, the fade starts this many seconds BEFORE the GIF ends and lasts until it ends.
-//            (otherwise it's a quick 0.07s fade right when the GIF ends)
 // With hold set, the sound starts the instant the scare starts (on frame 1), not when the GIF starts moving.
-const FADE = 0.07;
-function scare(gifFile, snd, done, hold, fadeLead) {
+function scare(gifFile, snd, done, hold) {
   const urls = [];
   if (hold > 0) playAudio(snd).catch(() => {});
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -160,15 +157,9 @@ function scare(gifFile, snd, done, hold, fadeLead) {
     overlay.replaceChildren(im);
     if (!(hold > 0)) playAudio(snd).catch(() => {});
 
-    const total = g.dur > 0 ? g.dur : 0.5;
-    const lead = fadeLead > 0 ? Math.min(fadeLead, total) : 0;
-    await wait((total - lead) * 1000);
+    await wait((g.dur > 0 ? g.dur : 0.5) * 1000);
 
-    const fade = lead > 0 ? lead : FADE;
-    overlay.style.transition = "opacity " + fade + "s linear";
-    overlay.style.opacity = "0";
-    await wait(fade * 1000);
-    overlay.remove();
+    overlay.remove(); // instant cut, no fade
     urls.forEach(u => URL.revokeObjectURL(u));
     done();
   }).catch(() => done());
@@ -302,7 +293,7 @@ function killScare() {
   state = "scare";
   scareBg = "black";
   flagCheater();
-  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5, 0.5); // hold 0.5s on frame 1, fade over the last 0.5s
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5); // hold 0.5s on frame 1
 }
 
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
