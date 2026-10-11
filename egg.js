@@ -110,37 +110,41 @@ function loadGif(file) {
   return gifCache[file];
 }
 
-// Full-window image. NOT pixelated (the only smooth thing in the game).
-function showFull(src, fit) {
-  const im = document.createElement("img");
-  im.src = src;
-  Object.assign(im.style, {
-    position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh",
-    objectFit: fit, background: "#000", imageRendering: "auto", zIndex: "10"
-  });
-  document.body.appendChild(im);
-  return im;
-}
-
-// GIF shows 1:1 (native size, centred, smooth) on a black backdrop while a sound plays.
-// done() fires when the GIF ends and it has faded out (0.07s). The sound keeps playing until it finishes.
-// hold = seconds to sit on frame 1 before the GIF starts animating.
+// GIF fills exactly the game screen (same box as the canvas), smooth, with a sound playing.
+// done() fires when the GIF ends (+ endWait) and it has faded out (0.07s). The sound keeps playing until it finishes.
+// hold    = seconds to sit on frame 1 before the GIF starts animating.
+// endWait = seconds to sit on the last frame after the GIF ends, before fading out.
 const FADE = 0.07;
-function scare(gifFile, snd, done, hold) {
+function scare(gifFile, snd, done, hold, endWait) {
   const urls = [];
   const wait = ms => new Promise(r => setTimeout(r, ms));
   loadGif(gifFile).then(async g => {
     const mkUrl = () => {
       if (!g.buf) return g.src;
-      const u = URL.createObjectURL(new Blob([g.buf], { type: "image/gif" })); // fresh = starts at frame 1
+      let buf = g.buf;
+      if (endWait > 0) {
+        // make the GIF play once (rename its loop block) so the last frame stays put during the wait
+        const b = new Uint8Array(g.buf.slice(0));
+        const tag = "NETSCAPE2.0";
+        for (let i = 0; i < b.length - 11; i++) {
+          let m = true;
+          for (let k = 0; k < 11; k++) if (b[i + k] !== tag.charCodeAt(k)) { m = false; break; }
+          if (m) { b[i] = 0x58; break; }
+        }
+        buf = b;
+      }
+      const u = URL.createObjectURL(new Blob([buf], { type: "image/gif" })); // fresh = starts at frame 1
       urls.push(u);
       return u;
     };
-    const fit = el => Object.assign(el.style, { maxWidth: "100%", maxHeight: "100%", display: "block", imageRendering: "auto" });
+    const fit = el => Object.assign(el.style, {
+      width: "100%", height: "100%", objectFit: "cover", display: "block", imageRendering: "auto"
+    });
+    const r = cv.getBoundingClientRect();
     const overlay = document.createElement("div");
     Object.assign(overlay.style, {
-      position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh", background: "#000",
-      display: "flex", alignItems: "center", justifyContent: "center", zIndex: "10", opacity: "1"
+      position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px",
+      background: "#000", zIndex: "10", opacity: "1"
     });
     document.body.appendChild(overlay);
 
@@ -166,6 +170,7 @@ function scare(gifFile, snd, done, hold) {
     if (!(hold > 0)) playAudio(snd).catch(() => {});
 
     await wait(g.dur > 0 ? g.dur * 1000 : 500);
+    if (endWait > 0) await wait(endWait * 1000);
 
     overlay.style.transition = "opacity " + FADE + "s linear";
     overlay.style.opacity = "0";
@@ -176,11 +181,26 @@ function scare(gifFile, snd, done, hold) {
   }).catch(() => done());
 }
 
-// EGG_CHEATER.png on its own for 20 seconds, no timer, nothing else
+// EGG_CHEATER.png for 20 seconds, no timer. Dark "CHEATER" text lines sit behind it.
 function cheaterWait() {
   return new Promise(res => {
-    const im = showFull(BASE + "EGG_CHEATER.png", "contain");
-    setTimeout(() => { im.remove(); clearFlag(); res(); }, 20000);
+    const box = document.createElement("div");
+    Object.assign(box.style, {
+      position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh", background: "#000",
+      overflow: "hidden", zIndex: "10", color: "#2b2b2b", font: "bold 26px/30px monospace",
+      whiteSpace: "pre", userSelect: "none"
+    });
+    const line = "CHEATER ".repeat(Math.ceil(innerWidth / 120) + 2);
+    box.textContent = Array(Math.ceil(innerHeight / 30) + 1).fill(line).join("\n");
+    const im = new Image();
+    im.src = BASE + "EGG_CHEATER.png";
+    Object.assign(im.style, {
+      position: "absolute", left: "0", top: "0", width: "100%", height: "100%",
+      objectFit: "contain", imageRendering: "auto"
+    });
+    box.appendChild(im);
+    document.body.appendChild(box);
+    setTimeout(() => { box.remove(); clearFlag(); res(); }, 20000);
   });
 }
 
@@ -289,7 +309,7 @@ function killScare() {
   state = "scare";
   scareBg = "black";
   flagCheater();
-  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5);
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.5, 0.5);
 }
 
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
