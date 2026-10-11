@@ -32,6 +32,7 @@ const CFG = {
   GLITCH_DELAY: 1.5          // seconds between the score glitch and the black screen
 };
 
+const VERSION = "1.0.0"; // bump this every release
 const W = CFG.W, H = CFG.H, EGG = CFG.EGG;
 const LANE_X = [W / 6, W / 2, (W * 5) / 6]; // centre x of left / middle / right
 
@@ -86,6 +87,11 @@ const CHEATER_KEY = "egg_cheater";
 function flagCheater() { try { localStorage.setItem(CHEATER_KEY, "1"); } catch (e) {} }
 function hasFlag() { try { return localStorage.getItem(CHEATER_KEY) === "1"; } catch (e) { return false; } }
 function clearFlag() { try { localStorage.removeItem(CHEATER_KEY); } catch (e) {} }
+
+// once the full 20s CHEATER screen has been sat through, it never shows again
+const SEEN_KEY = "egg_seen_cheater";
+function hasSeen() { try { return localStorage.getItem(SEEN_KEY) === "1"; } catch (e) { return false; } }
+function markSeen() { try { localStorage.setItem(SEEN_KEY, "1"); } catch (e) {} }
 
 // Reads how long one loop of a GIF lasts by summing its frame delays
 function gifDuration(b) {
@@ -261,7 +267,7 @@ function cheaterWait() {
     });
     box.appendChild(im);
     document.body.appendChild(box);
-    setTimeout(() => { box.remove(); clearFlag(); res(); }, 20000);
+    setTimeout(() => { box.remove(); clearFlag(); markSeen(); res(); }, 20000);
   });
 }
 
@@ -370,7 +376,7 @@ function killScare() {
   state = "scare";
   scareBg = "black";
   flagCheater();
-  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.8); // hold 0.5s on frame 1
+  scare("Charles_jumoscare2.gif", sfx.kill, () => { state = "black"; }, 0.8); // hold 0.8s on frame 1
 }
 
 // Scrambled finished. From the 2nd loss onward: jumpscare + one less heart for good.
@@ -561,6 +567,7 @@ function drawMenu() {
   const msg = menuReady ? "PRESS ENTER / TAP" : "PRESS ANY KEY";
   if (Math.floor(performance.now() / 500) % 2 === 0) text(msg, W / 2, 124, 8, "#fff", "center");
   text("< > or A D to move", W / 2, 135, 6, "#7a8f7a", "center");
+  text("v" + VERSION, W - 3, 135, 6, "#7a8f7a", "right");
 }
 
 function drawOver() {
@@ -631,9 +638,10 @@ cv.addEventListener("pointerdown", e => {
 
 // ---------- boot ----------
 (async () => {
+  console.log("EGG v" + VERSION);
   requestAnimationFrame(frame);
   loadGif("Charles_jumoscare1.gif"); loadGif("Charles_jumoscare2.gif"); // preload
-  if (hasFlag()) await cheaterWait();
+  if (hasFlag()) { if (hasSeen()) clearFlag(); else await cheaterWait(); }
   const [idle, run] = await Promise.allSettled([loadImg("EGG_CharlesIdle.png"), loadImg("EGG_CharlesRun.png")]);
   if (idle.status === "fulfilled") spriteIdle = buildSprite(idle.value);
   if (run.status === "fulfilled") spriteRun = buildSprite(run.value);
