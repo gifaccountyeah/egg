@@ -111,21 +111,18 @@ function loadGif(file) {
 }
 
 // GIF fills exactly the game screen (same box as the canvas), smooth, with a sound playing.
-// done() fires when the GIF ends and it has been cut away instantly (no fade). The sound keeps playing until it finishes.
-// hold    = seconds to sit on frame 1 before the GIF starts animating.
-// With hold set, the sound starts the instant the scare starts (on frame 1), not when the GIF starts moving.
+// done() fires when the GIF has REALLY finished its last frame; it's cut away instantly (no fade).
+// The sound keeps playing until it finishes.
+// hold = seconds to sit on frame 1 before the GIF starts animating (sound starts right away).
+//
+// Playback is driven frame by frame (ImageDecoder) so a heavy GIF that decodes slowly can't be
+// cut off early by a timer. Browsers without ImageDecoder use a timer with extra slack instead.
 function scare(gifFile, snd, done, hold) {
   const urls = [];
-  if (hold > 0) playAudio(snd).catch(() => {});
   const wait = ms => new Promise(r => setTimeout(r, ms));
+  if (hold > 0) playAudio(snd).catch(() => {});
+
   loadGif(gifFile).then(async g => {
-    const mkUrl = () => {
-      if (!g.buf) return g.src;
-      const buf = g.buf;
-      const u = URL.createObjectURL(new Blob([buf], { type: "image/gif" })); // fresh = starts at frame 1
-      urls.push(u);
-      return u;
-    };
     const fit = el => Object.assign(el.style, {
       width: "100%", height: "100%", objectFit: "cover", display: "block", imageRendering: "auto"
     });
@@ -133,31 +130,75 @@ function scare(gifFile, snd, done, hold) {
     const overlay = document.createElement("div");
     Object.assign(overlay.style, {
       position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px",
-      background: "#000", zIndex: "10", opacity: "1"
+      background: "#000", zIndex: "10"
     });
     document.body.appendChild(overlay);
 
-    if (hold > 0) {
-      // frame 1 only: snapshot it on a canvas, sound starts now, GIF starts after the hold
-      const im0 = new Image();
-      im0.src = mkUrl();
-      try { await im0.decode(); } catch (e) {}
-      const c = document.createElement("canvas");
-      c.width = im0.naturalWidth || 1; c.height = im0.naturalHeight || 1;
-      c.getContext("2d").drawImage(im0, 0, 0);
-      fit(c);
-      overlay.appendChild(c);
-      await wait(hold * 1000);
+    let dec = null, frames = 0;
+    if (g.buf && typeof ImageDecoder !== "undefined") {
+      try {
+        dec = new ImageDecoder({ data: g.buf.slice(0), type: "image/gif" });
+        await dec.tracks.ready;
+        frames = dec.tracks.selectedTrack.frameCount;
+        if (!(frames > 0)) dec = null;
+      } catch (e) { dec = null; }
     }
 
-    const im = new Image();
-    im.src = mkUrl();
-    fit(im);
-    try { await im.decode(); } catch (e) {}
-    overlay.replaceChildren(im);
-    if (!(hold > 0)) playAudio(snd).catch(() => {});
-
-    await wait((g.dur > 0 ? g.dur : 0.5) * 1000);
+    if (dec) {
+      const c = document.createElement("canvas");
+      const cx = c.getContext("2d");
+      fit(c);
+      overlay.appendChild(c);
+      let next = dec.decode({ frameIndex: 0 });
+      for (let i = 0; i < frames; i++) {
+        const { image } = await next;
+        if (i + 1 < frames) next = dec.decode({ frameIndex: i + 1 }); // decode ahead while this one shows
+        if (c.width !== image.displayWidth) { c.width = image.displayWidth; c.height = image.displayHeight; }
+        cx.drawImage(image, 0, 0);
+        let ms = (image.duration || 100000) / 1000;
+        if (ms <= 10) ms = 100; // same as browsers do for 0/1cs frames
+        image.close();
+        if (i === 0) {
+          if (hold > 0) await wait(hold * 1000);
+          else playAudio(snd).catch(() => {});
+        }
+        await wait(ms);
+      }
+      try { dec.close(); } catch (e) {}
+    } else {
+      // fallback: plain <img>, played once, timer with slack
+      const mkUrl = () => {
+        if (!g.buf) return g.src;
+        const b = new Uint8Array(g.buf.slice(0));
+        const tag = "NETSCAPE2.0"; // rename the loop block so it plays once and holds the last frame
+        for (let i = 0; i < b.length - 11; i++) {
+          let m = true;
+          for (let k = 0; k < 11; k++) if (b[i + k] !== tag.charCodeAt(k)) { m = false; break; }
+          if (m) { b[i] = 0x58; break; }
+        }
+        const u = URL.createObjectURL(new Blob([b], { type: "image/gif" }));
+        urls.push(u);
+        return u;
+      };
+      if (hold > 0) {
+        const im0 = new Image();
+        im0.src = mkUrl();
+        try { await im0.decode(); } catch (e) {}
+        const c = document.createElement("canvas");
+        c.width = im0.naturalWidth || 1; c.height = im0.naturalHeight || 1;
+        c.getContext("2d").drawImage(im0, 0, 0);
+        fit(c);
+        overlay.appendChild(c);
+        await wait(hold * 1000);
+      }
+      const im = new Image();
+      im.src = mkUrl();
+      fit(im);
+      try { await im.decode(); } catch (e) {}
+      overlay.replaceChildren(im);
+      if (!(hold > 0)) playAudio(snd).catch(() => {});
+      await wait(((g.dur > 0 ? g.dur : 0.5) * 1.25 + 0.3) * 1000);
+    }
 
     overlay.remove(); // instant cut, no fade
     urls.forEach(u => URL.revokeObjectURL(u));
