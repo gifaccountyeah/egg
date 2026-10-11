@@ -4,10 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>EGG</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/gifaccountyeah/egg@main/egg.css">
+<style>html,body{margin:0;height:100%;background:#000}</style>
 </head>
 <body>
 <canvas id="egg"></canvas>
-<script src="https://cdn.jsdelivr.net/gh/gifaccountyeah/egg@main/egg.js"></script>
+<script>
+// Always loads the newest commit: asks GitHub for the latest commit hash on main,
+// then loads every file from jsDelivr pinned to that hash (hash URLs are never stale).
+// If GitHub can't be reached (rate limit, offline), it falls back to @main.
+(async () => {
+  const REPO = "gifaccountyeah/egg", BRANCH = "main";
+  let ref = BRANCH;
+  try {
+    const r = await fetch("https://api.github.com/repos/" + REPO + "/commits/" + BRANCH,
+                          { headers: { Accept: "application/vnd.github.sha" } });
+    if (r.ok) ref = (await r.text()).trim();
+  } catch (e) {}
+
+  const base = "https://cdn.jsdelivr.net/gh/" + REPO + "@" + ref + "/";
+  window.EGG_BASE = base; // egg.js picks this up for audio and sprites
+
+  const css = document.createElement("link");
+  css.rel = "stylesheet";
+  css.href = base + "egg.css";
+  document.head.appendChild(css);
+
+  const js = document.createElement("script");
+  js.src = base + "egg.js";
+  document.body.appendChild(js);
+})();
+</script>
 </body>
 </html>
