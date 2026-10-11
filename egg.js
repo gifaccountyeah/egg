@@ -1,12 +1,4 @@
-/* EGG — a 3-lane egg catcher.
-   Everything (audio, sprites) is pulled from jsDelivr.
-   Tweak the CFG block below to change how the game feels. */
-(() => {
-"use strict";
 
-// ---------- where the files live ----------
-// Tip: jsDelivr caches @main for a while. When you push updates, tag a release
-// (e.g. @v1.0.1) or use a commit hash here so changes show up immediately.
 const BASE = window.EGG_BASE || "https://cdn.jsdelivr.net/gh/gifaccountyeah/egg@main/";
 
 // ---------- settings ----------
@@ -32,21 +24,28 @@ const CFG = {
   GLITCH_DELAY: 1.5          // seconds between the score glitch and the black screen
 };
 
-const VERSION = "1.1.0"; // bump this every release
+const VERSION = "1.1.1"; // bump this every release
 const W = CFG.W, H = CFG.H, EGG = CFG.EGG;
 const LANE_X = [W / 6, W / 2, (W * 5) / 6]; // centre x of left / middle / right
 
 // ---------- canvas ----------
 const cv = document.getElementById("egg");
 const ctx = cv.getContext("2d");
-cv.width = W; cv.height = H;
-ctx.imageSmoothingEnabled = false;
+let K = 1; // how many real screen pixels per game pixel
 
+// The game is still laid out on a 160x144 grid, but the canvas is drawn at full screen resolution:
+// text and badges come out sharp, while Charles / eggs (nearest-neighbour) stay chunky pixel art.
 function fit() {
   let s = Math.min(innerWidth / W, innerHeight / H);
   s = s >= 1 ? Math.floor(s) : s;
+  K = Math.max(1, Math.round(s * (window.devicePixelRatio || 1)));
+  cv.width = Math.round(W * K);
+  cv.height = Math.round(H * K);
   cv.style.width = W * s + "px";
   cv.style.height = H * s + "px";
+  cv.style.imageRendering = "auto";
+  ctx.setTransform(K, 0, 0, K, 0, 0);
+  ctx.imageSmoothingEnabled = false; // resizing resets this
 }
 addEventListener("resize", fit);
 fit();
@@ -658,7 +657,7 @@ function drawFit(img, x, y, w, h) {
   if (!img) return;
   const sc = Math.min(w / img.naturalWidth, h / img.naturalHeight);
   const dw = Math.max(1, Math.round(img.naturalWidth * sc)), dh = Math.max(1, Math.round(img.naturalHeight * sc));
-  ctx.imageSmoothingEnabled = sc < 0.5;
+  ctx.imageSmoothingEnabled = img.naturalWidth > dw * K; // big art -> smooth, small pixel art -> crisp
   ctx.drawImage(img, x + Math.round((w - dw) / 2), y + Math.round((h - dh) / 2), dw, dh);
   ctx.imageSmoothingEnabled = false;
 }
@@ -679,47 +678,49 @@ function drawMenu() {
   const got = BADGES.filter(b => owned[b.id]).length;
   text(best.score > 0 ? "BEST " + pad9(best.score) + "  R" + best.round : "NO SCORE YET", W / 2, 110, 6, "#9fc79f", "center");
   text("BADGES " + got + "/" + BADGES.length, W / 2, 119, 6, "#9fc79f", "center");
-  text("ARROWS+ENTER  M MUTE  P PAUSE", W / 2, 135, 6, "#7a8f7a", "center");
+  text("ARROWS+Z/ENTER  M MUTE  P PAUSE", W / 2, 135, 6, "#7a8f7a", "center");
   text("v" + VERSION, W - 3, 135, 6, "#7a8f7a", "right");
 }
 
 function drawAchievements() {
   ctx.fillStyle = "#1c261c"; ctx.fillRect(0, 0, W, H);
-  text("ACHIEVEMENTS", W / 2, 3, 8, "#ffe9a0", "center");
+  text("ACHIEVEMENTS", W / 2, 2, 8, "#ffe9a0", "center");
   BADGES.forEach((b, i) => {
-    const y = 14 + i * 38, has = !!owned[b.id];
-    ctx.fillStyle = has ? "#2e4a2e" : "#263226"; ctx.fillRect(4, y, 152, 36);
+    const y = 13 + i * 39, has = !!owned[b.id];
+    ctx.fillStyle = has ? "#2e4a2e" : "#263226"; ctx.fillRect(4, y, 152, 38);
     ctx.globalAlpha = has ? 1 : 0.28;
-    drawFit(b.img, 8, y + 3, 24, 24);
+    drawFit(b.img, 7, y + 4, 24, 24);
     ctx.globalAlpha = 1;
-    text(has ? "OWNED" : "LOCKED", 20, y + 29, 5, has ? "#ffe9a0" : "#7a8f7a", "center");
-    const name = wrapLines(b.name, 112, 7, true), sub = wrapLines(b.sub, 112, 6, false);
+    text(has ? "OWNED" : "LOCKED", 19, y + 30, 5, has ? "#ffe9a0" : "#7a8f7a", "center");
     let ty = y + 2;
-    name.forEach(l => { text(l, 38, ty, 7, has ? "#ffe9a0" : "#bcd0bc"); ty += 8; });
-    sub.forEach(l => { text(l, 38, ty, 6, "#9fb59f"); ty += 7; });
+    wrapLines(b.name, 118, 6.5, true).forEach(l => { text(l, 35, ty, 6.5, has ? "#ffe9a0" : "#bcd0bc"); ty += 8; });
+    wrapLines(b.bio, 118, 5.5, false).forEach(l => { text(l, 35, ty, 5.5, "#d8e8d8"); ty += 6.5; });
+    wrapLines(b.sub, 118, 5.5, false).forEach(l => { text(l, 35, ty, 5.5, "#9fb59f"); ty += 6.5; });
   });
-  text("ENTER / ESC / TAP: BACK", W / 2, 130, 6, "#7a8f7a", "center");
+  text("Z / ENTER / ESC / TAP: BACK", W / 2, 132, 6, "#7a8f7a", "center");
 }
 
-// badge popup: icon, name, bio, sub-bio
+// badge popup: icon, name, bio, sub-bio. Compact, slides up from the bottom
+// (stays below the catching area so you can still see the eggs coming)
 function drawToast() {
   if (!toast) return;
-  const b = toast.b, mw = 112;
-  const l1 = wrapLines(b.name, mw, 7, true), l2 = wrapLines(b.bio, mw, 6, false), l3 = wrapLines(b.sub, mw, 6, false);
-  const ph = 5 + 7 + l1.length * 8 + l2.length * 7 + l3.length * 7 + 3;
+  const b = toast.b, mw = 114;
+  const l1 = wrapLines(b.name, mw, 6, true), l2 = wrapLines(b.bio, mw, 5.5, false), l3 = wrapLines(b.sub, mw, 5.5, false);
+  const ph = Math.max(30, 6 + l1.length * 7.5 + (l2.length + l3.length) * 6.5);
   const IN = 0.25, OUT = 0.25;
   let k = 1;
   if (toast.t < IN) k = toast.t / IN;
   else if (toast.t > TOAST_TIME - OUT) k = (TOAST_TIME - toast.t) / OUT;
-  const py = Math.round(CFG.HUD_H + 2 - (1 - k) * (ph + CFG.HUD_H + 4));
-  ctx.fillStyle = "rgba(20,30,20,0.96)"; ctx.fillRect(4, py, 152, ph);
+  const py = H - 3 - ph + (1 - k) * (ph + 6);
+  ctx.globalAlpha = 0.93;
+  ctx.fillStyle = "#141e14"; ctx.fillRect(4, py, 152, ph);
+  ctx.globalAlpha = 1;
   ctx.strokeStyle = "#ffe9a0"; ctx.lineWidth = 1; ctx.strokeRect(4.5, py + 0.5, 151, ph - 1);
-  drawFit(b.img, 8, py + Math.round((ph - 28) / 2), 28, 28);
-  let ty = py + 4;
-  text("BADGE UNLOCKED", 40, ty, 5, "#ffe9a0"); ty += 7;
-  l1.forEach(l => { text(l, 40, ty, 7, "#fff"); ty += 8; });
-  l2.forEach(l => { text(l, 40, ty, 6, "#d8e8d8"); ty += 7; });
-  l3.forEach(l => { text(l, 40, ty, 6, "#9fb59f"); ty += 7; });
+  drawFit(b.img, 8, py + (ph - 24) / 2, 24, 24);
+  let ty = py + 3;
+  l1.forEach(l => { text(l, 37, ty, 6, "#ffe9a0"); ty += 7.5; });
+  l2.forEach(l => { text(l, 37, ty, 5.5, "#fff"); ty += 6.5; });
+  l3.forEach(l => { text(l, 37, ty, 5.5, "#9fb59f"); ty += 6.5; });
 }
 
 function drawOver() {
@@ -734,7 +735,7 @@ function drawOver() {
   } else {
     text("BEST " + pad9(best.score), W / 2, 101, 6, "#7a8f7a", "center");
   }
-  text("ENTER / TAP: PLAY AGAIN", W / 2, 113, 7, "#fff", "center");
+  text("Z / ENTER / TAP: PLAY AGAIN", W / 2, 113, 7, "#fff", "center");
   text("ESC / TAP HERE: MENU", W / 2, 128, 6, "#7a8f7a", "center");
 }
 
@@ -810,7 +811,7 @@ addEventListener("keydown", e => {
   else if (k === "ArrowRight" || k === "KeyD") move(1);
   else if (k === "ArrowUp" || k === "KeyW") { if (state === "menu") menuSel = (menuSel + MENU_ITEMS - 1) % MENU_ITEMS; }
   else if (k === "ArrowDown" || k === "KeyS") { if (state === "menu") menuSel = (menuSel + 1) % MENU_ITEMS; }
-  else if (k === "Enter" || k === "Space") confirm();
+  else if (k === "Enter" || k === "Space" || k === "KeyZ") confirm();
   else if (k === "KeyP") togglePause();
   else if (k === "Escape") {
     if (state === "over") toMenu();
