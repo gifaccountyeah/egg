@@ -1,4 +1,12 @@
+/* EGG — a 3-lane egg catcher.
+   Everything (audio, sprites) is pulled from jsDelivr.
+   Tweak the CFG block below to change how the game feels. */
+(() => {
+"use strict";
 
+// ---------- where the files live ----------
+// Tip: jsDelivr caches @main for a while. When you push updates, tag a release
+// (e.g. @v1.0.1) or use a commit hash here so changes show up immediately.
 const BASE = window.EGG_BASE || "https://cdn.jsdelivr.net/gh/gifaccountyeah/egg@main/";
 
 // ---------- settings ----------
